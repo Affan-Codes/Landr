@@ -3,7 +3,7 @@
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { UserAvatar } from "@/components/UserAvatar";
+import { UserAvatar } from "@/features/users/components/UserAvatar";
 import { SignOutButton, useClerk } from "@clerk/nextjs";
 import { BookOpenIcon, BrainCircuitIcon, FileSlidersIcon, LogOut, SpeechIcon, User } from "lucide-react";
 import Link from "next/link";
