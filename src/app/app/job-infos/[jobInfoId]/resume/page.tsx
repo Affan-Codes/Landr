@@ -1,12 +1,9 @@
-import { db } from "@/drizzle/db";
-import { JobInfoTable } from "@/drizzle/schema";
 import { JobInfoBackLink } from "@/features/jobInfos/components/JobInfoBackLink";
-import { getJobInfoIdTag } from "@/features/jobInfos/dbCache";
-import { and, eq } from "drizzle-orm";
+import { canRunResumeAnalysis } from "@/features/resumeAnalysis/permissions";
 import { Loader2Icon } from "lucide-react";
-import { cacheTag } from "next/dist/server/use-cache/cache-tag";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
+import ResumePageClient from "./_ResumePageClient";
 
 export default async function ResumePage({
   params,
@@ -31,13 +28,4 @@ async function SuspendedComponent({ jobInfoId }: { jobInfoId: string }) {
   if (!(await canRunResumeAnalysis())) return redirect("/app/upgrade");
 
   return <ResumePageClient jobInfoId={jobInfoId} />;
-}
-
-async function getJobInfo(id: string, userId: string) {
-  "use cache";
-  cacheTag(getJobInfoIdTag(id));
-
-  return db.query.JobInfoTable.findFirst({
-    where: and(eq(JobInfoTable.id, id), eq(JobInfoTable.userId, userId)),
-  });
 }
