@@ -12,7 +12,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
-    "postinstall": "drizzle-kit generate && drizzle-kit migrate"
+    "postinstall": "drizzle-kit push"
   },
   "dependencies": {
     "@ai-sdk/google": "^2.0.17",
