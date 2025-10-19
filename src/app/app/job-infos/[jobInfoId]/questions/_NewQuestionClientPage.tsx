@@ -17,10 +17,9 @@ import {
   QuestionDifficulty,
 } from "@/drizzle/schema";
 import { formatQuestionDifficulty } from "@/features/questions/formatters";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useCompletion } from "@ai-sdk/react";
 import { errorToast } from "@/lib/errorToast";
-import z from "zod";
 
 type Status = "awaiting-answer" | "awaiting-difficulty" | "init";
 
