@@ -1,7 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Enable source maps for production debugging
+  productionBrowserSourceMaps: true,
+
   experimental: {
     useCache: true,
   },
