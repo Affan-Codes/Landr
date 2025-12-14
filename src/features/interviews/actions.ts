@@ -13,6 +13,7 @@ import { PLAN_LIMIT_MESSAGE, RATE_LIMIT_MESSAGE } from "@/lib/errorToast";
 import arcjet, { request, tokenBucket } from "@arcjet/next";
 import { env } from "@/data/env/server";
 import { generateAiInterviewFeedback } from "@/services/ai/interviews";
+import { revalidatePath } from "next/cache";
 
 const aj = arcjet({
   characteristics: ["userId"],
@@ -138,6 +139,10 @@ export async function generateInterviewFeedback(interviewId: string) {
   }
 
   await updateInterviewDb(interviewId, { feedback });
+
+  revalidatePath(
+    `/app/job-infos/${interview.jobInfo.id}/interviews/${interviewId}`
+  );
 
   return { error: false };
 }
