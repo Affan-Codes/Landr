@@ -20,7 +20,7 @@ export function revalidateJobInfoCache({
   id: string;
   userId: string;
 }) {
-  revalidateTag(getJobInfoGlobalTag());
-  revalidateTag(getJobInfoUserTag(userId));
-  revalidateTag(getJobInfoIdTag(id));
+  revalidateTag(getJobInfoGlobalTag(), "max");
+  revalidateTag(getJobInfoUserTag(userId), "max");
+  revalidateTag(getJobInfoIdTag(id), "max");
 }

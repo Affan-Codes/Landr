@@ -20,7 +20,7 @@ export function revalidateQuestionCache({
   id: string;
   jobInfoId: string;
 }) {
-  revalidateTag(getQuestionGlobalTag());
-  revalidateTag(getQuestionJobInfoTag(jobInfoId));
-  revalidateTag(getQuestionIdTag(id));
+  revalidateTag(getQuestionGlobalTag(), "max");
+  revalidateTag(getQuestionJobInfoTag(jobInfoId), "max");
+  revalidateTag(getQuestionIdTag(id), "max");
 }
