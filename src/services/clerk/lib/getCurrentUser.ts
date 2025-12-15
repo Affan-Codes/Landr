@@ -3,7 +3,7 @@ import { UserTable } from "@/drizzle/schema";
 import { getUserIdTag } from "@/features/users/dbCache";
 import { auth } from "@clerk/nextjs/server";
 import { eq } from "drizzle-orm";
-import { cacheTag } from "next/dist/server/use-cache/cache-tag";
+import { cacheTag } from "next/cache";
 
 export async function getCurrentUser({ allData = false } = {}) {
   const { userId, redirectToSignIn } = await auth();
@@ -17,7 +17,7 @@ export async function getCurrentUser({ allData = false } = {}) {
 
 async function getUser(id: string) {
   "use cache";
-  
+
   cacheTag(getUserIdTag(id));
 
   return db.query.UserTable.findFirst({

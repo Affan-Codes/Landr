@@ -5,7 +5,7 @@ import { jobInfoSchema } from "./schemas";
 import { getCurrentUser } from "@/services/clerk/lib/getCurrentUser";
 import { redirect } from "next/navigation";
 import { insertJobInfo, updateJobInfo as updateJobInfoDb } from "./db";
-import { cacheTag } from "next/dist/server/use-cache/cache-tag";
+import { cacheTag } from "next/cache";
 import { getJobInfoIdTag } from "./dbCache";
 import { db } from "@/drizzle/db";
 import { and, eq } from "drizzle-orm";

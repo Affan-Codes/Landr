@@ -5,7 +5,7 @@ import { canCreateQuestion } from "@/features/questions/permissions";
 import { getCurrentUser } from "@/services/clerk/lib/getCurrentUser";
 import { and, eq } from "drizzle-orm";
 import { Loader2Icon } from "lucide-react";
-import { cacheTag } from "next/dist/server/use-cache/cache-tag";
+import { cacheTag } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 import { Suspense } from "react";
 import NewQuestionClientPage from "./_NewQuestionClientPage";
@@ -13,7 +13,7 @@ import NewQuestionClientPage from "./_NewQuestionClientPage";
 export default async function QuestionsPage({
   params,
 }: {
-  params: Promise<{ jobInfoId: string; }>;
+  params: Promise<{ jobInfoId: string }>;
 }) {
   const { jobInfoId } = await params;
 
@@ -25,12 +25,12 @@ export default async function QuestionsPage({
         </div>
       }
     >
-      <SuspendedComponent jobInfoId={ jobInfoId } />
+      <SuspendedComponent jobInfoId={jobInfoId} />
     </Suspense>
   );
 }
 
-async function SuspendedComponent({ jobInfoId }: { jobInfoId: string; }) {
+async function SuspendedComponent({ jobInfoId }: { jobInfoId: string }) {
   const { userId, redirectToSignIn } = await getCurrentUser();
   if (userId == null) return redirectToSignIn();
 
@@ -39,7 +39,7 @@ async function SuspendedComponent({ jobInfoId }: { jobInfoId: string; }) {
   const jobInfo = await getJobInfo(jobInfoId, userId);
   if (jobInfo == null) return notFound();
 
-  return <NewQuestionClientPage jobInfo={ jobInfo } />;
+  return <NewQuestionClientPage jobInfo={jobInfo} />;
 }
 
 async function getJobInfo(id: string, userId: string) {
@@ -47,6 +47,6 @@ async function getJobInfo(id: string, userId: string) {
   cacheTag(getJobInfoIdTag(id));
 
   return db.query.JobInfoTable.findFirst({
-    where: and(eq(JobInfoTable.id, id), eq(JobInfoTable.userId, userId))
+    where: and(eq(JobInfoTable.id, id), eq(JobInfoTable.userId, userId)),
   });
 }

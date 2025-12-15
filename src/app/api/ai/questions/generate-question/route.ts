@@ -9,12 +9,12 @@ import { canCreateQuestion } from "@/features/questions/permissions";
 import { PLAN_LIMIT_MESSAGE } from "@/lib/errorToast";
 import { getCurrentUser } from "@/services/clerk/lib/getCurrentUser";
 import { and, asc, eq } from "drizzle-orm";
-import { cacheTag } from "next/dist/server/use-cache/cache-tag";
 import { NextRequest, NextResponse } from "next/server";
 import z from "zod";
 import { getQuestionJobInfoTag } from "@/features/questions/dbCache";
 import { generateAiQuestion } from "@/services/ai/questions";
 import { insertQuestion } from "@/features/questions/db";
+import { cacheTag } from "next/cache";
 
 const schema = z.object({
   prompt: z.enum(questionDifficulties),

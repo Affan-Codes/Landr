@@ -5,7 +5,7 @@ import { getQuestionIdTag } from "@/features/questions/dbCache";
 import { generateAiQuestionFeedback } from "@/services/ai/questions";
 import { getCurrentUser } from "@/services/clerk/lib/getCurrentUser";
 import { eq } from "drizzle-orm";
-import { cacheTag } from "next/dist/server/use-cache/cache-tag";
+import { cacheTag } from "next/cache";
 import z from "zod";
 
 const schema = z.object({

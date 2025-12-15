@@ -1,7 +1,7 @@
 "use server";
 
 import { getCurrentUser } from "@/services/clerk/lib/getCurrentUser";
-import { cacheTag } from "next/dist/server/use-cache/cache-tag";
+import { cacheTag, revalidatePath } from "next/cache";
 import { getJobInfoIdTag } from "../jobInfos/dbCache";
 import { db } from "@/drizzle/db";
 import { and, eq } from "drizzle-orm";
@@ -13,7 +13,6 @@ import { PLAN_LIMIT_MESSAGE, RATE_LIMIT_MESSAGE } from "@/lib/errorToast";
 import arcjet, { request, tokenBucket } from "@arcjet/next";
 import { env } from "@/data/env/server";
 import { generateAiInterviewFeedback } from "@/services/ai/interviews";
-import { revalidatePath } from "next/cache";
 
 const aj = arcjet({
   characteristics: ["userId"],
@@ -41,7 +40,7 @@ export async function createInterview({
     };
   }
 
-  // Permission
+  // Permission check
   if (!(await canCreateInterview())) {
     return {
       error: true,
@@ -59,6 +58,7 @@ export async function createInterview({
     };
   }
 
+  // Verify job ownership
   const jobInfo = await getJobInfo(jobInfoId, userId);
   if (jobInfo == null) {
     return {
@@ -67,10 +67,50 @@ export async function createInterview({
     };
   }
 
-  // Create Interview
-  const interview = await insertInterview({ jobInfoId, duration: "00:00:00" });
+  try {
+    // Retry logic for database operations
+    let retryCount = 0;
+    const maxRetries = 3;
+    let interview: { id: string; jobInfoId: string } | null = null;
 
-  return { error: false, id: interview.id };
+    while (retryCount < maxRetries && !interview) {
+      try {
+        interview = await insertInterview({
+          jobInfoId,
+          duration: "00:00:00",
+        });
+      } catch (error) {
+        retryCount++;
+        console.error(
+          `Interview creation attempt ${retryCount} failed:`,
+          error
+        );
+
+        if (retryCount >= maxRetries) {
+          throw error;
+        }
+
+        // Exponential backoff: 100ms, 200ms, 400ms
+        await new Promise((resolve) =>
+          setTimeout(resolve, 100 * Math.pow(2, retryCount - 1))
+        );
+      }
+    }
+
+    if (!interview) {
+      throw new Error("Failed to create interview after retries");
+    }
+
+    revalidatePath(`/app/job-infos/${jobInfoId}/interviews`);
+
+    return { error: false, id: interview.id };
+  } catch (error) {
+    console.error("Interview creation failed:", error);
+    return {
+      error: true,
+      message: "Failed to create interview. Please try again.",
+    };
+  }
 }
 
 export async function updateInterview(
@@ -88,17 +128,57 @@ export async function updateInterview(
     };
   }
 
-  const interview = await getInterview(id, userId);
-  if (interview == null) {
+  try {
+    const interview = await getInterview(id, userId);
+    if (interview == null) {
+      return {
+        error: true,
+        message: "You don't have permission to do this.",
+      };
+    }
+
+    // Add retry logic and validation
+    if (data.humeChatId) {
+      // Ensure we don't overwrite existing chatId
+      if (interview.humeChatId && interview.humeChatId !== data.humeChatId) {
+        console.warn(`Attempted to overwrite chatId for interview ${id}`);
+        return { error: false }; // Silent success, already linked
+      }
+    }
+
+    let retryCount = 0;
+    const maxRetries = 3;
+    let success = false;
+
+    while (retryCount < maxRetries && !success) {
+      try {
+        await updateInterviewDb(id, data);
+        success = true;
+      } catch (error) {
+        retryCount++;
+        console.error(`Interview update attempt ${retryCount} failed:`, error);
+
+        if (retryCount >= maxRetries) {
+          throw error;
+        }
+
+        await new Promise((resolve) =>
+          setTimeout(resolve, 100 * Math.pow(2, retryCount - 1))
+        );
+      }
+    }
+
+    revalidatePath(`/app/job-infos/${interview.jobInfo.id}/interviews`);
+    revalidatePath(`/app/job-infos/${interview.jobInfo.id}/interviews/${id}`);
+
+    return { error: false };
+  } catch (error) {
+    console.error("Interview update failed:", error);
     return {
       error: true,
-      message: "You don't have permission to do this.",
+      message: "Failed to update interview. Please try again.",
     };
   }
-
-  await updateInterviewDb(id, data);
-
-  return { error: false };
 }
 
 export async function generateInterviewFeedback(interviewId: string) {
@@ -110,41 +190,49 @@ export async function generateInterviewFeedback(interviewId: string) {
     };
   }
 
-  const interview = await getInterview(interviewId, userId);
-  if (interview == null) {
+  try {
+    const interview = await getInterview(interviewId, userId);
+    if (interview == null) {
+      return {
+        error: true,
+        message: "You don't have permission to do this",
+      };
+    }
+
+    if (interview.humeChatId == null) {
+      return {
+        error: true,
+        message: "Interview has not been completed yet",
+      };
+    }
+
+    const feedback = await generateAiInterviewFeedback({
+      humeChatId: interview.humeChatId,
+      jobInfo: interview.jobInfo,
+      userName: user.name,
+    });
+
+    if (feedback == null) {
+      return {
+        error: true,
+        message: "Failed to generate feedback",
+      };
+    }
+
+    await updateInterviewDb(interviewId, { feedback });
+
+    revalidatePath(
+      `/app/job-infos/${interview.jobInfo.id}/interviews/${interviewId}`
+    );
+
+    return { error: false };
+  } catch (error) {
+    console.error("Feedback generation failed:", error);
     return {
       error: true,
-      message: "You don't have permission to do this",
+      message: "Failed to generate feedback. Please try again.",
     };
   }
-
-  if (interview.humeChatId == null) {
-    return {
-      error: true,
-      message: "Interview has not been completed yet",
-    };
-  }
-
-  const feedback = await generateAiInterviewFeedback({
-    humeChatId: interview.humeChatId,
-    jobInfo: interview.jobInfo,
-    userName: user.name,
-  });
-
-  if (feedback == null) {
-    return {
-      error: true,
-      message: "Failed to generate feedback",
-    };
-  }
-
-  await updateInterviewDb(interviewId, { feedback });
-
-  revalidatePath(
-    `/app/job-infos/${interview.jobInfo.id}/interviews/${interviewId}`
-  );
-
-  return { error: false };
 }
 
 async function getJobInfo(id: string, userId: string) {

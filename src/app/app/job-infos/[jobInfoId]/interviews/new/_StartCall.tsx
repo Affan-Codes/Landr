@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import { LoadingSwap } from "@/components/ui/loading-swap";
 import { env } from "@/data/env/client";
 import { JobInfoTable } from "@/drizzle/schema";
 import {
@@ -13,7 +14,7 @@ import { condenseChatMessages } from "@/services/hume/lib/condenseChatMessages";
 import { useVoice, VoiceReadyState } from "@humeai/voice-react";
 import { Loader2Icon, MicIcon, MicOffIcon, PhoneOffIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const StartCall = ({
   jobInfo,
@@ -27,77 +28,227 @@ const StartCall = ({
   >;
   user: { name: string; imageUrl: string };
 }) => {
-  const { connect, readyState, chatMetadata, callDurationTimestamp } =
-    useVoice();
+  const {
+    connect,
+    readyState,
+    chatMetadata,
+    callDurationTimestamp,
+    disconnect,
+  } = useVoice();
   const [interviewId, setInterviewId] = useState<string | null>(null);
+  const [isCreatingInterview, setIsCreatingInterview] = useState(false);
   const router = useRouter();
-  const durationRef = useRef(callDurationTimestamp);
-  durationRef.current = callDurationTimestamp;
 
-  // Sync chat ID
+  // Using refs to avoid stale closure issues
+  const durationRef = useRef(callDurationTimestamp);
+  const interviewIdRef = useRef<string | null>(null);
+  const hasUpdatedChatId = useRef(false);
+  const connectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const readyStateRef = useRef(readyState);
+  const disconnectRef = useRef(disconnect);
+
+  durationRef.current = callDurationTimestamp;
+  interviewIdRef.current = interviewId;
+  readyStateRef.current = readyState;
+  disconnectRef.current = disconnect;
+
+  // Sync chat ID with guaranteed state availability
   useEffect(() => {
-    if (chatMetadata?.chatId == null || interviewId == null) {
+    const currentInterviewId = interviewIdRef.current;
+    const currentChatId = chatMetadata?.chatId;
+
+    // Guard against race condition
+    if (!currentInterviewId || !currentChatId || hasUpdatedChatId.current) {
       return;
     }
-    updateInterview(interviewId, { humeChatId: chatMetadata.chatId });
+
+    // Mark as updated BEFORE async operation
+    hasUpdatedChatId.current = true;
+
+    // Use async IIFE to handle promise properly
+    (async () => {
+      try {
+        await updateInterview(currentInterviewId, {
+          humeChatId: currentChatId,
+        });
+      } catch (error) {
+        console.error("Failed to update interview with chat ID:", error);
+        hasUpdatedChatId.current = false; // Allow retry
+        errorToast("Failed to link interview session. Please try again.");
+        disconnect(); // Cleanup on failure
+      }
+    })();
   }, [chatMetadata?.chatId, interviewId]);
 
-  // Sync duration
+  // Sync duration with exponential backoff
   useEffect(() => {
-    if (interviewId == null) {
-      return;
-    }
-    const intervalId = setInterval(() => {
-      if (durationRef.current == null) return;
-      updateInterview(interviewId, { duration: durationRef.current });
-    }, 10000);
+    if (!interviewIdRef.current) return;
+
+    let attemptCount = 0;
+    const maxAttempts = 3;
+
+    const updateDuration = async () => {
+      if (!durationRef.current || !interviewIdRef.current) return;
+
+      try {
+        await updateInterview(interviewIdRef.current, {
+          duration: durationRef.current,
+        });
+        attemptCount = 0; // Reset on success
+      } catch (error) {
+        attemptCount++;
+        console.error(`Duration sync failed (attempt ${attemptCount}):`, error);
+
+        if (attemptCount >= maxAttempts) {
+          console.error("Max duration sync attempts reached");
+        }
+      }
+    };
+
+    const intervalId = setInterval(updateDuration, 10000);
 
     return () => clearInterval(intervalId);
   }, [interviewId]);
 
-  // Handle disconnects
+  // Handle disconnects with proper cleanup
   useEffect(() => {
     if (readyState !== VoiceReadyState.CLOSED) return;
-    if (interviewId == null) {
-      return router.push(`/app/job-infos/${jobInfo.id}/interviews`);
+
+    const currentInterviewId = interviewIdRef.current;
+
+    // Clear timeout on disconnect
+    if (connectionTimeoutRef.current) {
+      clearTimeout(connectionTimeoutRef.current);
+      connectionTimeoutRef.current = null;
     }
 
-    if (durationRef.current != null) {
-      updateInterview(interviewId, { duration: durationRef.current });
+    if (!currentInterviewId) {
+      router.push(`/app/job-infos/${jobInfo.id}/interviews`);
+      return;
     }
 
-    router.push(`/app/job-infos/${jobInfo.id}/interviews/${interviewId}`);
-  }, [interviewId, readyState, router, jobInfo.id]);
+    // Final duration sync before navigation
+    (async () => {
+      try {
+        if (durationRef.current) {
+          await updateInterview(currentInterviewId, {
+            duration: durationRef.current,
+          });
+        }
+
+        router.refresh();
+
+        router.push(
+          `/app/job-infos/${jobInfo.id}/interviews/${currentInterviewId}`
+        );
+      } catch (error) {
+        console.error("Failed final sync:", error);
+        
+        router.refresh();
+        // Navigate anyway to prevent stuck state
+        router.push(
+          `/app/job-infos/${jobInfo.id}/interviews/${currentInterviewId}`
+        );
+      }
+    })();
+  }, [readyState, router, jobInfo.id]);
+
+  // Monitor connection state and clear timeout when connected
+  useEffect(() => {
+    if (readyState === VoiceReadyState.OPEN && connectionTimeoutRef.current) {
+      clearTimeout(connectionTimeoutRef.current);
+      connectionTimeoutRef.current = null;
+      setIsCreatingInterview(false);
+    }
+  }, [readyState]);
+
+  // Atomic interview creation with retry logic
+  const handleStartInterview = useCallback(async () => {
+    if (isCreatingInterview) return;
+
+    setIsCreatingInterview(true);
+
+    try {
+      // Create interview record FIRST
+      const res = await createInterview({ jobInfoId: jobInfo.id });
+
+      if (res.error) {
+        errorToast(res.message);
+        setIsCreatingInterview(false);
+        return;
+      }
+
+      // Wait for state update to complete
+      await new Promise<void>((resolve) => {
+        setInterviewId(res.id);
+        // Use setTimeout to ensure state is flushed
+        setTimeout(resolve, 0);
+      });
+
+      // Set connection timeout BEFORE calling connect
+      connectionTimeoutRef.current = setTimeout(() => {
+        console.error("Hume connection timeout after 30 seconds");
+        errorToast(
+          "Connection timeout. Please check your network and try again."
+        );
+        setIsCreatingInterview(false);
+
+        // Cleanup: disconnect if still trying
+        if (readyStateRef.current === VoiceReadyState.CONNECTING) {
+          disconnectRef.current();
+        }
+
+        // Navigate back to interviews list
+        router.push(`/app/job-infos/${jobInfo.id}/interviews`);
+      }, 30000);
+
+      // NOW connect to Hume with guaranteed interviewId
+      connect({
+        auth: { type: "accessToken", value: accessToken },
+        configId: env.NEXT_PUBLIC_HUME_CONFIG_ID,
+        sessionSettings: {
+          type: "session_settings",
+          variables: {
+            userName: user.name,
+            title: jobInfo.title || "Not Specified",
+            description: jobInfo.description,
+            experienceLevel: jobInfo.experienceLevel,
+          },
+        },
+      });
+    } catch (error) {
+      console.error("Interview creation failed:", error);
+      errorToast("Failed to start interview. Please try again.");
+      setIsCreatingInterview(false);
+
+      // Clear timeout on error
+      if (connectionTimeoutRef.current) {
+        clearTimeout(connectionTimeoutRef.current);
+        connectionTimeoutRef.current = null;
+      }
+    }
+  }, [isCreatingInterview, jobInfo, user, accessToken, connect, router]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (connectionTimeoutRef.current) {
+        clearTimeout(connectionTimeoutRef.current);
+      }
+    };
+  }, []);
 
   if (readyState === VoiceReadyState.IDLE) {
     return (
       <div className="flex justify-center items-center h-screen-header">
         <Button
           size="lg"
-          onClick={async () => {
-            const res = await createInterview({ jobInfoId: jobInfo.id });
-            if (res.error) {
-              return errorToast(res.message);
-            }
-
-            setInterviewId(res.id);
-
-            connect({
-              auth: { type: "accessToken", value: accessToken },
-              configId: env.NEXT_PUBLIC_HUME_CONFIG_ID,
-              sessionSettings: {
-                type: "session_settings",
-                variables: {
-                  userName: user.name,
-                  title: jobInfo.title || "Not Specified",
-                  description: jobInfo.description,
-                  experienceLevel: jobInfo.experienceLevel,
-                },
-              },
-            });
-          }}
+          onClick={handleStartInterview}
+          disabled={isCreatingInterview}
         >
-          Start Interview
+          <LoadingSwap isLoading={isCreatingInterview}>
+            Start Interview
+          </LoadingSwap>
         </Button>
       </div>
     );
