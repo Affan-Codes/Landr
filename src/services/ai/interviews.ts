@@ -34,10 +34,21 @@ export async function generateAiInterviewFeedback({
     })
     .filter((f) => f != null);
 
-  const { text } = await generateText({
-    model: google("gemini-2.5-flash"),
-    prompt: JSON.stringify(formattedMessages),
-    system: `You are an expert interview coach and evaluator. Your role is to analyze a mock job interview transcript and provide clear, detailed, and structured feedback on the interviewee's performance based on the job requirements. Your output should be in markdown format.
+  // Add retry logic with exponential backoff
+  let retryCount = 0;
+  const maxRetries = 2;
+
+  while (retryCount <= maxRetries) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 45000);
+
+      const { text } = await generateText({
+        model: google("gemini-2.5-flash"),
+        prompt: JSON.stringify(formattedMessages),
+        maxOutputTokens: 3000,
+        abortSignal: controller.signal,
+        system: `You are an expert interview coach and evaluator. Your role is to analyze a mock job interview transcript and provide clear, detailed, and structured feedback on the interviewee's performance based on the job requirements. Your output should be in markdown format.
   
 ---
 
@@ -106,7 +117,36 @@ Additional Notes:
 - Refer to the interviewee as "you" in your feedback. This feedback should be written as if you were speaking directly to the interviewee.
 - Include a number rating (out of 10) in the heading for each category (e.g., "Communication Clarity: 8/10") as well as an overall rating at the very start of the response.
 - Stop generating output as soon you have provided the full feedback.`,
-  });
+      });
 
-  return text;
+      clearTimeout(timeoutId);
+      return text;
+    } catch (error) {
+      retryCount++;
+
+      const isTimeout = error instanceof Error && error.name === "AbortError";
+      const isRateLimit =
+        error instanceof Error && error.message.includes("429");
+
+      console.error(`AI feedback generation attempt ${retryCount} failed:`, {
+        error: error instanceof Error ? error.message : "Unknown error",
+        isTimeout,
+        isRateLimit,
+      });
+
+      // Retry on transient errors
+      if (retryCount <= maxRetries) {
+        const delay = 1000 * Math.pow(2, retryCount - 1); // 1s, 2s
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        continue;
+      }
+
+      // Max retries exceeded
+      throw new Error(
+        "Failed to generate feedback after multiple attempts. Please try again later."
+      );
+    }
+  }
+
+  throw new Error("Failed to generate feedback.");
 }
